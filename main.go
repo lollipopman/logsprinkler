@@ -5,7 +5,7 @@ import (
   "log"
   "net"
   "fmt"
-  "time"
+  "gopkg.in/mcuadros/go-syslog.v2"
 )
 
 func main() {
@@ -19,12 +19,15 @@ func main() {
   log_channel := make(chan string)
   new_client_channel := make(chan chan string)
   go func(new_client_channel chan chan string, log_channel chan string) {
-    l, err := net.Listen("tcp", ":2001")
-    if err != nil {
-      log.Fatal(err)
-    }
-    defer l.Close()
-    conn, err := l.Accept()
+
+    syslog_channel := make(syslog.LogPartsChannel)
+    handler := syslog.NewChannelHandler(syslog_channel)
+
+    server := syslog.NewServer()
+    server.SetFormat(syslog.RFC3164)
+    server.SetHandler(handler)
+    server.ListenTCP("0.0.0.0:5514")
+    server.Boot()
 
     var client_channel_list []chan string
     var client_channel chan string
@@ -32,21 +35,19 @@ func main() {
       select {
         case client_channel = <-new_client_channel:
           client_channel_list = append(client_channel_list, client_channel)
-          fmt.Println("NEW CLIENT")
-        default: fmt.Println("NO NEW CLIENTS")
+          fmt.Println("New client")
+        case logParts := <-syslog_channel:
+          for _, client_channel = range client_channel_list {
+            if str, ok := logParts["content"].(string); ok {
+              client_channel <- str + "\n"
+            } else {
+              fmt.Println(str)
+              fmt.Println("Not a string!!!!")
+            }
+          }
       }
-
-      buf := make([]byte, 1024)
-      reqLen, err := io.ReadFull(conn, buf)
-      if err != nil && reqLen == 1024 {
-        log.Fatal(err)
-      }
-
-      for _, client_channel = range client_channel_list {
-        client_channel <- string(buf)
-      }
-      time.Sleep(2 * time.Second)
     }
+    server.Wait()
   }(new_client_channel, log_channel)
 
   for {
@@ -70,3 +71,4 @@ func main() {
     }(conn, client_log_channel)
   }
 }
+
