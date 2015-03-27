@@ -3,7 +3,8 @@ package main
 
 import (
 	"fmt"
-	"gopkg.in/mcuadros/go-syslog.v2"
+	"github.com/jeromer/syslogparser"
+	"github.com/wolfeidau/syslogasuarus/syslogd"
 	"io"
 	"log"
 	"net"
@@ -20,15 +21,10 @@ func main() {
 	log_channel := make(chan string)
 	new_client_channel := make(chan chan string)
 	go func(new_client_channel chan chan string, log_channel chan string) {
-
-		syslog_channel := make(syslog.LogPartsChannel)
-		handler := syslog.NewChannelHandler(syslog_channel)
-
-		server := syslog.NewServer()
-		server.SetFormat(syslog.RFC3164)
-		server.SetHandler(handler)
-		server.ListenTCP("0.0.0.0:5514")
-		server.Boot()
+		syslog_channel := make(chan syslogparser.LogParts, 1)
+		svr := syslogd.NewServer()
+		svr.ListenUDP(":5514")
+		svr.Start(syslog_channel)
 
 		var client_channel_list []chan string
 		var client_channel chan string
@@ -38,17 +34,13 @@ func main() {
 				client_channel_list = append(client_channel_list, client_channel)
 				fmt.Println("New client")
 			case logParts := <-syslog_channel:
+				log_message := fmt.Sprintf("%s %s %s %s %s\n", logParts["timestamp"], logParts["severity"], logParts["hostname"], logParts["tag"], logParts["content"])
+				fmt.Println(log_message)
 				for _, client_channel = range client_channel_list {
-					if str, ok := logParts["content"].(string); ok {
-						client_channel <- str + "\n"
-					} else {
-						fmt.Println(str)
-						fmt.Println("Not a string!!!!")
-					}
+					client_channel <- log_message
 				}
 			}
 		}
-		server.Wait()
 	}(new_client_channel, log_channel)
 
 	for {
