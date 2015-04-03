@@ -14,18 +14,18 @@ import (
 
 func handleClientHeartbeats(conn *net.UDPConn, clients chan string) {
 
-  var buf [1024]byte
+	var buf [1024]byte
 
-  for {
-    n, addr, err := conn.ReadFromUDP(buf[0:])
-    if err != nil {
-      log.Print("Error: Received bad UDP packet\n")
-    } else if string(buf[0:n]) != "HEARTBEAT" {
-      log.Print("Error: Received packet without a heatbeat message", string(buf[0:n]), "\n")
-    } else {
-      clients <- addr.String()
-    }
-  }
+	for {
+		n, addr, err := conn.ReadFromUDP(buf[0:])
+		if err != nil {
+			log.Print("Error: Received bad UDP packet\n")
+		} else if string(buf[0:n]) != "HEARTBEAT" {
+			log.Print("Error: Received packet without a heatbeat message", string(buf[0:n]), "\n")
+		} else {
+			clients <- addr.String()
+		}
+	}
 }
 
 func serveSyslogs(conn *net.UDPConn, clients chan string) {
@@ -56,30 +56,30 @@ func serveSyslogs(conn *net.UDPConn, clients chan string) {
 }
 
 func pruneDeadClients(activeClients map[string]time.Time) {
-  for clientAddr, lastHeartbeat := range activeClients {
-    now := time.Now()
-    lastHeartbeatDuration := now.Sub(lastHeartbeat)
-    if lastHeartbeatDuration.Seconds() >= 10 {
-      delete(activeClients, clientAddr)
-    }
-  }
+	for clientAddr, lastHeartbeat := range activeClients {
+		now := time.Now()
+		lastHeartbeatDuration := now.Sub(lastHeartbeat)
+		if lastHeartbeatDuration.Seconds() >= 10 {
+			delete(activeClients, clientAddr)
+		}
+	}
 }
 
 func checkError(err error) {
-  if err != nil {
-    log.Fatalf("Fatal error ", err.Error())
-  }
+	if err != nil {
+		log.Fatalf("Fatal error ", err.Error())
+	}
 }
 
 func main() {
-  service := ":5515"
-  udpAddr, err := net.ResolveUDPAddr("udp4", service)
-  checkError(err)
+	service := ":5515"
+	udpAddr, err := net.ResolveUDPAddr("udp4", service)
+	checkError(err)
 
-  conn, err := net.ListenUDP("udp", udpAddr)
-  checkError(err)
+	conn, err := net.ListenUDP("udp", udpAddr)
+	checkError(err)
 
-  clients := make(chan string)
-  go handleClientHeartbeats(conn, clients)
-  serveSyslogs(conn, clients)
+	clients := make(chan string)
+	go handleClientHeartbeats(conn, clients)
+	serveSyslogs(conn, clients)
 }
