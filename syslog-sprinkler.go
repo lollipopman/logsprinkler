@@ -7,10 +7,18 @@ import (
 	"fmt"
 	"github.com/jeromer/syslogparser"
 	"github.com/wolfeidau/syslogasuarus/syslogd"
-	"log"
+	"log/syslog"
 	"net"
 	"time"
 )
+
+var logger *syslog.Writer
+
+func init() {
+		var err error
+		logger, err = syslog.Dial("udp", "localhost:514", syslog.LOG_INFO|syslog.LOG_DAEMON, "syslog-sprinkler")
+		checkError(err)
+}
 
 func handleClientHeartbeats(conn *net.UDPConn, clients chan string) {
 
@@ -19,9 +27,9 @@ func handleClientHeartbeats(conn *net.UDPConn, clients chan string) {
 	for {
 		n, addr, err := conn.ReadFromUDP(buf[0:])
 		if err != nil {
-			log.Print("Error: Received bad UDP packet\n")
+			logger.Info("Error: Received bad UDP packet\n")
 		} else if string(buf[0:n]) != "HEARTBEAT" {
-			log.Print("Error: Received packet without a heatbeat message", string(buf[0:n]), "\n")
+			logger.Info("Error: Received packet without a heatbeat message" + string(buf[0:n]) + "\n")
 		} else {
 			clients <- addr.String()
 		}
@@ -67,11 +75,12 @@ func pruneDeadClients(activeClients map[string]time.Time) {
 
 func checkError(err error) {
 	if err != nil {
-		log.Fatalf("Fatal error ", err.Error())
+		logger.Crit("Fatal error " + err.Error())
 	}
 }
 
 func main() {
+	logger.Info("syslog-sprinkler starting up")
 	service := ":5515"
 	udpAddr, err := net.ResolveUDPAddr("udp4", service)
 	checkError(err)
