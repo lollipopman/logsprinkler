@@ -1,0 +1,5 @@
+syslog-sprinkler (1.0) stable; urgency=low
+
+  * Initial release.
+
+ --  Jesse Hathaway <jesse@mbuki-mvuki.org>  Wed, 08 Apr 2015 19:18:25 +0000
