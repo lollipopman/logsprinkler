@@ -6,7 +6,7 @@ package main
 import (
 	"fmt"
 	"github.com/jeromer/syslogparser"
-	"github.com/wolfeidau/syslogasuarus/syslogd"
+	"github.com/lollipopman/syslogd"
 	"log/syslog"
 	"net"
 	"time"
