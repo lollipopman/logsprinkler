@@ -17,7 +17,7 @@ func receiveSyslogs(conn net.Conn) {
 	for {
 		n, err := conn.Read(buf[0:])
 		checkError(err)
-		fmt.Println(string(buf[0:n]))
+		fmt.Print(string(buf[0:n]))
 	}
 }
 
