@@ -9,6 +9,7 @@ import (
 	"github.com/lollipopman/syslogd"
 	"log/syslog"
 	"net"
+	"os"
 	"time"
 )
 
@@ -17,7 +18,7 @@ var logger *syslog.Writer
 func init() {
 		var err error
 		logger, err = syslog.Dial("udp", "localhost:514", syslog.LOG_INFO|syslog.LOG_DAEMON, "syslog-sprinkler")
-		checkError(err)
+		checkErrorFatal(err)
 }
 
 func handleClientHeartbeats(conn *net.UDPConn, clients chan string) {
@@ -37,9 +38,11 @@ func handleClientHeartbeats(conn *net.UDPConn, clients chan string) {
 }
 
 func serveSyslogs(conn *net.UDPConn, clients chan string) {
+	var err error
 	syslogChannel := make(chan syslogparser.LogParts, 1)
 	syslogServer := syslogd.NewServer()
-	syslogServer.ListenUDP(":5514")
+	err = syslogServer.ListenUDP(":5514")
+	checkErrorFatal(err)
 	syslogServer.Start(syslogChannel)
 
 	activeClients := make(map[string]time.Time)
@@ -73,9 +76,10 @@ func pruneDeadClients(activeClients map[string]time.Time) {
 	}
 }
 
-func checkError(err error) {
+func checkErrorFatal(err error) {
 	if err != nil {
 		logger.Crit("Fatal error " + err.Error())
+		os.Exit(1)
 	}
 }
 
@@ -83,10 +87,10 @@ func main() {
 	logger.Info("syslog-sprinkler starting up")
 	service := ":5515"
 	udpAddr, err := net.ResolveUDPAddr("udp4", service)
-	checkError(err)
+	checkErrorFatal(err)
 
 	conn, err := net.ListenUDP("udp", udpAddr)
-	checkError(err)
+	checkErrorFatal(err)
 
 	clients := make(chan string)
 	go handleClientHeartbeats(conn, clients)
