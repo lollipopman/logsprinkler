@@ -41,7 +41,7 @@ func serveSyslogs(conn *net.UDPConn, clients chan string) {
 	var err error
 	syslogChannel := make(chan syslogparser.LogParts, 1)
 	syslogServer := syslogd.NewServer()
-	err = syslogServer.ListenUDP(":5514")
+	err = syslogServer.ListenUDP(":5515")
 	checkErrorFatal(err)
 	syslogServer.Start(syslogChannel)
 
@@ -85,7 +85,7 @@ func checkErrorFatal(err error) {
 
 func main() {
 	logger.Info("syslog-sprinkler starting up")
-	service := ":5515"
+	service := ":5514"
 	udpAddr, err := net.ResolveUDPAddr("udp4", service)
 	checkErrorFatal(err)
 

@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"log"
 	"net"
-	"os"
 	"time"
 )
 
@@ -36,11 +35,7 @@ func checkError(err error) {
 }
 
 func main() {
-	if len(os.Args) != 2 {
-		log.Fatalf("Usage: %s host:port", os.Args[0])
-	}
-	service := os.Args[1]
-
+	service := ":5514"
 	udpAddr, err := net.ResolveUDPAddr("udp4", service)
 	checkError(err)
 
