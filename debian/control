@@ -1,13 +1,15 @@
 Source: syslog-sprinkler
 Build-Depends: golang-syslogparser-dev, golang-syslogd-dev, golang-go, dh-golang
 Maintainer: Jesse Hathaway <jesse@mbuki-mvuki.org>
+Priority: extra
+Section: main
 Vcs-Browser: https://github.com/lollipopman/syslog-sprinkler
 Vcs-Git: git@github.com:lollipopman/syslog-sprinkler.git
 
 Package: syslog-sprinkler
 Architecture: any
+Priority: extra
 Depends: ${shlibs:Depends}, ${misc:Depends}, daemon
-Maintainer: Jesse Hathaway <jesse@mbuki-mvuki.org>
 Description: Broadcasts UDP syslog messages to clients
   syslog-sprinkler is a daemon which listens for syslog messages on UDP port
   5514. In addition it listens for clients, syslog-barrels, who are sending
