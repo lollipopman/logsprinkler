@@ -1,7 +1,7 @@
 #!/bin/sh
 
 ### BEGIN INIT INFO
-# Provides:             syslog-sprinkler
+# Provides:             logsprinkler
 # Required-Start:       $remote_fs $syslog
 # Required-Stop:        $remote_fs $syslog
 # Default-Start:        2 3 4 5
@@ -10,14 +10,14 @@
 ### END INIT INFO
 
 PATH=/usr/sbin:/sbin:/bin:/usr/bin
-PID_FILE=/run/syslog-sprinkler/syslog-sprinkler.pid
+PID_FILE=/run/logsprinkler/logsprinkler.pid
 USER=daemon
 GROUP=daemon
 
 start() {
   mkdir -p `dirname ${PID_FILE}`
   chown ${USER}:${GROUP} `dirname ${PID_FILE}`
-  daemon --pidfile=${PID_FILE} --user=${USER}:${GROUP} --output=daemon.info --name=syslog-sprinkler syslog-sprinkler
+  daemon --pidfile=${PID_FILE} --user=${USER}:${GROUP} --output=daemon.info --name=logsprinkler logsprinkler
 }
 
 status() {
@@ -28,7 +28,7 @@ stop() {
   if status;then
     kill `cat ${PID_FILE}`
   else
-    echo 'syslog-sprinkler is not running'
+    echo 'logsprinkler is not running'
   fi
 }
 
@@ -47,7 +47,7 @@ case "$1" in
     start
   ;;
   *)
-    echo "Usage: /etc/init.d/syslog-sprinkler {start|status|stop|restart}"
+    echo "Usage: /etc/init.d/logsprinkler {start|status|stop|restart}"
     exit 1
   ;;
 esac

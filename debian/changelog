@@ -1,4 +1,10 @@
-syslog-sprinkler (1.0) stable; urgency=low
+logsprinkler (1.1) stable; urgency=low
+
+  * rename to log sprinkler
+
+ --  Jesse Hathaway <jesse@mbuki-mvuki.org>  Tue, 21 Apr 2015 13:44:43 +0000
+
+logsprinkler (1.0) stable; urgency=low
 
   * Initial release.
 
