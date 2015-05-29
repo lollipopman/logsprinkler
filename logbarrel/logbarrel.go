@@ -1,28 +1,41 @@
 // vim: noexpandtab tabstop=2 shiftwidth=2:
+// logbarrel: syslog sprinkler client
 
-// syslog sprinkler client
 package main
 
 import (
+	"encoding/json"
+	"flag"
 	"fmt"
 	"log"
 	"net"
+	"regexp"
 	"time"
 )
 
-func receiveSyslogs(conn net.Conn) {
-	var buf [1024]byte
+type RemoteHeartbeatMessage struct {
+	Type      string
+	LogRegexp string
+}
 
+func receiveSyslogs(conn net.Conn) {
+	readBuffer := make([]byte, 1024)
 	for {
-		n, err := conn.Read(buf[0:])
+		bytesRead, err := conn.Read(readBuffer[0:])
 		checkError(err)
-		fmt.Print(string(buf[0:n]))
+		fmt.Print(string(readBuffer[0:bytesRead]))
 	}
 }
 
-func sendHeartbeats(conn net.Conn) {
+func sendHeartbeats(conn net.Conn, logRexp *regexp.Regexp) {
+	var remoteHeartbeatMessage RemoteHeartbeatMessage
+	remoteHeartbeatMessage.Type = "heartbeat"
+	remoteHeartbeatMessage.LogRegexp = logRexp.String()
+	byteHeartbeatMessage, err := json.Marshal(remoteHeartbeatMessage)
+	checkError(err)
+
 	for {
-		_, err := conn.Write([]byte("HEARTBEAT"))
+		_, err := conn.Write(byteHeartbeatMessage)
 		checkError(err)
 		time.Sleep(2 * time.Second)
 	}
@@ -35,14 +48,13 @@ func checkError(err error) {
 }
 
 func main() {
-	service := ":5514"
-	udpAddr, err := net.ResolveUDPAddr("udp4", service)
+	var logRegexpArg = flag.String("tag-regexp", ".*", "Receive syslog tags matching this regular expression")
+	flag.Parse()
+	logRegexp, err := regexp.Compile(*logRegexpArg)
 	checkError(err)
-
-	conn, err := net.DialUDP("udp", nil, udpAddr)
+	UDPAddr := net.UDPAddr{Port: 5514}
+	conn, err := net.DialUDP("udp", nil, &UDPAddr)
 	checkError(err)
-
-	go sendHeartbeats(conn)
-
+	go sendHeartbeats(conn, logRegexp)
 	receiveSyslogs(conn)
 }
