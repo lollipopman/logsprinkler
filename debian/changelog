@@ -1,3 +1,9 @@
+logsprinkler (1.4) stable; urgency=low
+
+  * read the daemon man page, simplified the init script
+
+ --  Jesse Hathaway <jesse@mbuki-mvuki.org>  Thu, 18 Jun 2015 18:19:39 +0000
+
 logsprinkler (1.3) stable; urgency=low
 
   * add ability for logsprinkler to only send logs matching logbarrel regular

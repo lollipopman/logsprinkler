@@ -17,19 +17,19 @@ GROUP=daemon
 start() {
   mkdir -p `dirname ${PID_FILE}`
   chown ${USER}:${GROUP} `dirname ${PID_FILE}`
-  daemon --pidfile=${PID_FILE} --user=${USER}:${GROUP} --output=daemon.info --name=logsprinkler logsprinkler
-}
-
-status() {
-  test -e ${PID_FILE} && kill -0 `cat ${PID_FILE}` 2>/dev/null
+  daemon --respawn --pidfile=${PID_FILE} --user=${USER}:${GROUP} --output=daemon.info --name=logsprinkler logsprinkler
 }
 
 stop() {
-  if status;then
-    kill `cat ${PID_FILE}`
-  else
-    echo 'logsprinkler is not running'
-  fi
+  daemon --stop --pidfile=${PID_FILE} --user=${USER}:${GROUP} --output=daemon.info --name=logsprinkler logsprinkler
+}
+
+restart() {
+  daemon --restart --pidfile=${PID_FILE} --user=${USER}:${GROUP} --output=daemon.info --name=logsprinkler logsprinkler
+}
+
+status() {
+  daemon --running --verbose --pidfile=${PID_FILE} --user=${USER}:${GROUP} --output=daemon.info --name=logsprinkler logsprinkler
 }
 
 case "$1" in
@@ -43,11 +43,10 @@ case "$1" in
     stop
   ;;
   restart)
-    stop
-    start
+    restart
   ;;
   *)
-    echo "Usage: /etc/init.d/logsprinkler {start|status|stop|restart}"
+    echo "Usage: /etc/init.d/logsprinkler {start|stop|restart|status}"
     exit 1
   ;;
 esac
