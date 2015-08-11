@@ -5,6 +5,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"github.com/davecheney/profile"
 	"github.com/jeromer/syslogparser"
 	"github.com/lollipopman/syslogd"
 	"log/syslog"
@@ -16,13 +17,18 @@ import (
 
 var logger *syslog.Writer
 
+type ClientGroup struct {
+	GroupRegexp regexp.Regexp
+	Clients     map[string]ClientConfigMessage
+}
+
 type RemoteHeartbeatMessage struct {
 	Type      string
 	LogRegexp string
 }
 
 type ClientConfigMessage struct {
-	LogRegexp      regexp.Regexp
+	LogRegexp      string
 	NetworkAddress net.UDPAddr
 	LastHeartbeat  time.Time
 }
@@ -47,31 +53,42 @@ func handleClientHeartbeats(conn *net.UDPConn, clients chan ClientConfigMessage)
 		if checkError(err) {
 			continue
 		}
-		clientRegex, err := regexp.Compile(remoteHeartbeatMessage.LogRegexp)
-		if checkError(err) {
-			continue
-		}
 		clientConfigMessage.NetworkAddress = *networkAddress
 		clientConfigMessage.LastHeartbeat = time.Now()
-		clientConfigMessage.LogRegexp = *clientRegex
+		clientConfigMessage.LogRegexp = remoteHeartbeatMessage.LogRegexp
 		clients <- clientConfigMessage
 	}
 }
 
 func serveSyslogs(conn *net.UDPConn, clients chan ClientConfigMessage) {
 	var err error
+	var newClientGroup ClientGroup
+	var newClientMap map[string]ClientConfigMessage
 	syslogChannel := make(chan syslogparser.LogParts, 1)
 	syslogServer := syslogd.NewServer()
 	err = syslogServer.ListenUDP(":5515")
 	checkErrorFatal(err)
 	syslogServer.Start(syslogChannel)
-	activeClients := make(map[string]ClientConfigMessage)
+	activeClients := make(map[string]ClientGroup)
 	pruneDeadClientsTicker := time.NewTicker(time.Second * 10).C
 
 	for {
 		select {
 		case clientConfigMessage := <-clients:
-			activeClients[clientConfigMessage.NetworkAddress.String()] = clientConfigMessage
+			if clientGroup, ok := activeClients[clientConfigMessage.LogRegexp]; ok {
+				clientGroup.Clients[clientConfigMessage.NetworkAddress.String()] = clientConfigMessage
+			} else {
+				clientRegex, err := regexp.Compile(clientConfigMessage.LogRegexp)
+				if checkError(err) {
+					fmt.Print("New client with bad regexp")
+				} else {
+					newClientGroup.GroupRegexp = *clientRegex
+					newClientMap = make(map[string]ClientConfigMessage)
+					newClientGroup.Clients = newClientMap
+					newClientGroup.Clients[clientConfigMessage.NetworkAddress.String()] = clientConfigMessage
+					activeClients[clientConfigMessage.LogRegexp] = newClientGroup
+				}
+			}
 		case <-pruneDeadClientsTicker:
 			pruneDeadClients(activeClients)
 			fmt.Print(len(activeClients))
@@ -81,20 +98,24 @@ func serveSyslogs(conn *net.UDPConn, clients chan ClientConfigMessage) {
 			formattedTime := unformattedTime.Format(time.Stamp)
 			logMessage := fmt.Sprintf("%s %s %s%s %s\n", formattedTime, logParts["hostname"], logParts["tag"], ":", logParts["content"])
 			logTag := fmt.Sprintf("%s", logParts["tag"])
-			for _, clientConfigMessage := range activeClients {
-				if clientConfigMessage.LogRegexp.MatchString(logTag) {
-					conn.WriteToUDP([]byte(logMessage), &clientConfigMessage.NetworkAddress)
+			for _, clientGroup := range activeClients {
+				if len(clientGroup.Clients) > 0 && clientGroup.GroupRegexp.MatchString(logTag) {
+					for _, clientConfigMessage := range clientGroup.Clients {
+						conn.WriteToUDP([]byte(logMessage), &clientConfigMessage.NetworkAddress)
+					}
 				}
 			}
 		}
 	}
 }
 
-func pruneDeadClients(activeClients map[string]ClientConfigMessage) {
-	for clientNetworkAddress, clientConfigMessage := range activeClients {
-		lastHeartbeatDuration := time.Now().Sub(clientConfigMessage.LastHeartbeat)
-		if lastHeartbeatDuration.Seconds() >= 10 {
-			delete(activeClients, clientNetworkAddress)
+func pruneDeadClients(activeClients map[string]ClientGroup) {
+	for _, clientGroup := range activeClients {
+		for clientNetworkAddress, clientConfigMessage := range clientGroup.Clients {
+			lastHeartbeatDuration := time.Now().Sub(clientConfigMessage.LastHeartbeat)
+			if lastHeartbeatDuration.Seconds() >= 10 {
+				delete(clientGroup.Clients, clientNetworkAddress)
+			}
 		}
 	}
 }
@@ -116,6 +137,7 @@ func checkError(err error) bool {
 }
 
 func main() {
+	defer profile.Start(profile.CPUProfile).Stop()
 	logger.Info("logsprinkler starting up")
 	UDPAddr := net.UDPAddr{Port: 5514}
 	conn, err := net.ListenUDP("udp", &UDPAddr)
