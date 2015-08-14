@@ -9,13 +9,13 @@ import (
 	"fmt"
 	"log"
 	"net"
-	"regexp"
+	"strings"
 	"time"
 )
 
 type RemoteHeartbeatMessage struct {
-	Type      string
-	LogRegexp string
+	Type       string
+	SyslogTags []string
 }
 
 func receiveSyslogs(conn net.Conn) {
@@ -27,10 +27,10 @@ func receiveSyslogs(conn net.Conn) {
 	}
 }
 
-func sendHeartbeats(conn net.Conn, logRexp *regexp.Regexp) {
+func sendHeartbeats(conn net.Conn, syslogTags []string) {
 	var remoteHeartbeatMessage RemoteHeartbeatMessage
 	remoteHeartbeatMessage.Type = "heartbeat"
-	remoteHeartbeatMessage.LogRegexp = logRexp.String()
+	remoteHeartbeatMessage.SyslogTags = syslogTags
 	byteHeartbeatMessage, err := json.Marshal(remoteHeartbeatMessage)
 	checkError(err)
 
@@ -48,13 +48,16 @@ func checkError(err error) {
 }
 
 func main() {
-	var logRegexpArg = flag.String("tag-regexp", ".*", "Receive syslog tags matching this regular expression")
+	var syslogTagsString = flag.String("t", "*", "Comma separated list of Syslog tags or '*' to select all")
+	var syslogTags []string
+
 	flag.Parse()
-	logRegexp, err := regexp.Compile(*logRegexpArg)
-	checkError(err)
+	syslogTags = strings.Split(*syslogTagsString, ",")
+
 	UDPAddr := net.UDPAddr{Port: 5514}
 	conn, err := net.DialUDP("udp", nil, &UDPAddr)
 	checkError(err)
-	go sendHeartbeats(conn, logRegexp)
+
+	go sendHeartbeats(conn, syslogTags)
 	receiveSyslogs(conn)
 }

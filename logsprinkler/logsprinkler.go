@@ -4,33 +4,38 @@ package main
 
 import (
 	"encoding/json"
+	"flag"
 	"fmt"
-	"github.com/davecheney/profile"
 	"github.com/jeromer/syslogparser"
 	"github.com/lollipopman/syslogd"
 	"log/syslog"
 	"net"
 	"os"
-	"regexp"
+	"os/signal"
+	"runtime/pprof"
+	"sort"
+	"strings"
+	"syscall"
 	"time"
 )
 
 var logger *syslog.Writer
 
 type ClientGroup struct {
-	GroupRegexp regexp.Regexp
-	Clients     map[string]ClientConfigMessage
+	GroupSyslogTags []string
+	Clients         map[string]ClientConfigMessage
 }
 
 type RemoteHeartbeatMessage struct {
-	Type      string
-	LogRegexp string
+	Type       string
+	SyslogTags []string
 }
 
 type ClientConfigMessage struct {
-	LogRegexp      string
-	NetworkAddress net.UDPAddr
-	LastHeartbeat  time.Time
+	SyslogTags          []string
+	SyslogTagIdentifier string
+	NetworkAddress      net.UDPAddr
+	LastHeartbeat       time.Time
 }
 
 func init() {
@@ -55,69 +60,85 @@ func handleClientHeartbeats(conn *net.UDPConn, clients chan ClientConfigMessage)
 		}
 		clientConfigMessage.NetworkAddress = *networkAddress
 		clientConfigMessage.LastHeartbeat = time.Now()
-		clientConfigMessage.LogRegexp = remoteHeartbeatMessage.LogRegexp
+		clientConfigMessage.SyslogTags = remoteHeartbeatMessage.SyslogTags
+		sort.Strings(clientConfigMessage.SyslogTags)
+		clientConfigMessage.SyslogTagIdentifier = strings.Join(clientConfigMessage.SyslogTags, ",")
 		clients <- clientConfigMessage
 	}
 }
 
-func serveSyslogs(conn *net.UDPConn, clients chan ClientConfigMessage) {
+func serveSyslogs(conn *net.UDPConn, clients chan ClientConfigMessage, signals chan os.Signal) {
+	var searchIndex int
 	var err error
+	var signal os.Signal
 	var newClientGroup ClientGroup
 	var newClientMap map[string]ClientConfigMessage
+
+	pruneDeadClientsTicker := time.NewTicker(time.Second * 10).C
+	activeClients := make(map[string]ClientGroup)
 	syslogChannel := make(chan syslogparser.LogParts, 1)
+
 	syslogServer := syslogd.NewServer()
 	err = syslogServer.ListenUDP(":5515")
 	checkErrorFatal(err)
 	syslogServer.Start(syslogChannel)
-	activeClients := make(map[string]ClientGroup)
-	pruneDeadClientsTicker := time.NewTicker(time.Second * 10).C
 
 	for {
 		select {
 		case clientConfigMessage := <-clients:
-			if clientGroup, ok := activeClients[clientConfigMessage.LogRegexp]; ok {
+			if clientGroup, ok := activeClients[clientConfigMessage.SyslogTagIdentifier]; ok {
 				clientGroup.Clients[clientConfigMessage.NetworkAddress.String()] = clientConfigMessage
 			} else {
-				clientRegex, err := regexp.Compile(clientConfigMessage.LogRegexp)
-				if checkError(err) {
-					fmt.Print("New client with bad regexp")
-				} else {
-					newClientGroup.GroupRegexp = *clientRegex
-					newClientMap = make(map[string]ClientConfigMessage)
-					newClientGroup.Clients = newClientMap
-					newClientGroup.Clients[clientConfigMessage.NetworkAddress.String()] = clientConfigMessage
-					activeClients[clientConfigMessage.LogRegexp] = newClientGroup
-				}
+				newClientGroup.GroupSyslogTags = clientConfigMessage.SyslogTags
+				newClientMap = make(map[string]ClientConfigMessage)
+				newClientGroup.Clients = newClientMap
+				newClientGroup.Clients[clientConfigMessage.NetworkAddress.String()] = clientConfigMessage
+				activeClients[clientConfigMessage.SyslogTagIdentifier] = newClientGroup
 			}
 		case <-pruneDeadClientsTicker:
 			pruneDeadClients(activeClients)
-			fmt.Print(len(activeClients))
 		case logParts := <-syslogChannel:
 			// Example rsyslog message: 'Apr  3 19:23:40 apply02 nginx-apply: this is the message'
 			unformattedTime := logParts["timestamp"].(time.Time)
 			formattedTime := unformattedTime.Format(time.Stamp)
 			logMessage := fmt.Sprintf("%s %s %s%s %s\n", formattedTime, logParts["hostname"], logParts["tag"], ":", logParts["content"])
 			logTag := fmt.Sprintf("%s", logParts["tag"])
-			for _, clientGroup := range activeClients {
-				if len(clientGroup.Clients) > 0 && clientGroup.GroupRegexp.MatchString(logTag) {
+			for clientGroupIdentifier, clientGroup := range activeClients {
+				searchIndex = sort.SearchStrings(clientGroup.GroupSyslogTags, logTag)
+				if clientGroupIdentifier == "*" || clientGroup.GroupSyslogTags[searchIndex] == logTag {
 					for _, clientConfigMessage := range clientGroup.Clients {
 						conn.WriteToUDP([]byte(logMessage), &clientConfigMessage.NetworkAddress)
 					}
 				}
 			}
+		case signal = <-signals:
+			fmt.Println("\nExiting caught signal:", signal)
+			return
 		}
 	}
 }
 
 func pruneDeadClients(activeClients map[string]ClientGroup) {
-	for _, clientGroup := range activeClients {
+	var totalNumberOfClients int
+	var numberOfClients int
+	numberOfClients = 0
+	for clientGroupIdentifier, clientGroup := range activeClients {
 		for clientNetworkAddress, clientConfigMessage := range clientGroup.Clients {
 			lastHeartbeatDuration := time.Now().Sub(clientConfigMessage.LastHeartbeat)
 			if lastHeartbeatDuration.Seconds() >= 10 {
 				delete(clientGroup.Clients, clientNetworkAddress)
 			}
 		}
+
+		if len(clientGroup.Clients) == 0 {
+			delete(activeClients, clientGroupIdentifier)
+		} else {
+			numberOfClients = len(clientGroup.Clients)
+			totalNumberOfClients += numberOfClients
+			fmt.Printf("Group [%s], Clients %d\n", clientGroupIdentifier, numberOfClients)
+		}
 	}
+	fmt.Println("Total Clients:", totalNumberOfClients)
 }
 
 func checkErrorFatal(err error) {
@@ -137,12 +158,33 @@ func checkError(err error) bool {
 }
 
 func main() {
-	defer profile.Start(profile.CPUProfile).Stop()
+	var cpuprofile = flag.String("cpuprofile", "", "write cpu profile to file")
+	var memprofile = flag.String("memprofile", "", "write memory profile to this file")
+	flag.Parse()
+
 	logger.Info("logsprinkler starting up")
+
+	signals := make(chan os.Signal, 1)
+	signal.Notify(signals, syscall.SIGINT, syscall.SIGTERM)
+
+	if *cpuprofile != "" {
+		f, err := os.Create(*cpuprofile)
+		checkErrorFatal(err)
+		pprof.StartCPUProfile(f)
+		defer pprof.StopCPUProfile()
+	}
+
 	UDPAddr := net.UDPAddr{Port: 5514}
 	conn, err := net.ListenUDP("udp", &UDPAddr)
 	checkErrorFatal(err)
 	clients := make(chan ClientConfigMessage)
 	go handleClientHeartbeats(conn, clients)
-	serveSyslogs(conn, clients)
+	serveSyslogs(conn, clients, signals)
+
+	if *memprofile != "" {
+		f, err := os.Create(*memprofile)
+		checkErrorFatal(err)
+		pprof.Lookup("heap").WriteTo(f, 0)
+		f.Close()
+	}
 }
