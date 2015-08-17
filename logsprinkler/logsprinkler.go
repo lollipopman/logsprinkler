@@ -98,14 +98,14 @@ func serveSyslogs(conn *net.UDPConn, clients chan ClientConfigMessage, signals c
 		case <-pruneDeadClientsTicker:
 			pruneDeadClients(activeClients)
 		case logParts := <-syslogChannel:
-			// Example rsyslog message: 'Apr  3 19:23:40 apply02 nginx-apply: this is the message'
-			unformattedTime := logParts["timestamp"].(time.Time)
-			formattedTime := unformattedTime.Format(time.Stamp)
-			logMessage := fmt.Sprintf("%s %s %s%s %s\n", formattedTime, logParts["hostname"], logParts["tag"], ":", logParts["content"])
 			logTag := fmt.Sprintf("%s", logParts["tag"])
 			for clientGroupIdentifier, clientGroup := range activeClients {
 				searchIndex = sort.SearchStrings(clientGroup.GroupSyslogTags, logTag)
-				if clientGroupIdentifier == "*" || clientGroup.GroupSyslogTags[searchIndex] == logTag {
+				if clientGroupIdentifier == "*" || (searchIndex < len(clientGroup.GroupSyslogTags) && clientGroup.GroupSyslogTags[searchIndex] == logTag) {
+					// Example rsyslog message: 'Apr  3 19:23:40 apply02 nginx-apply: this is the message'
+					unformattedTime := logParts["timestamp"].(time.Time)
+					formattedTime := unformattedTime.Format(time.Stamp)
+					logMessage := fmt.Sprintf("%s %s %s%s %s\n", formattedTime, logParts["hostname"], logParts["tag"], ":", logParts["content"])
 					for _, clientConfigMessage := range clientGroup.Clients {
 						conn.WriteToUDP([]byte(logMessage), &clientConfigMessage.NetworkAddress)
 					}
