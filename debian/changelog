@@ -1,3 +1,9 @@
+logsprinkler (1.5) stable; urgency=low
+
+  * Remove regex matching to increase performance
+
+ --  Jesse Hathaway <jesse@mbuki-mvuki.org>  Fri, 21 Aug 2015 21:15:40 +0000
+
 logsprinkler (1.4) stable; urgency=low
 
   * read the daemon man page, simplified the init script
