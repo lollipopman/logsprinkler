@@ -13,18 +13,11 @@ import (
 	"os"
 	"os/signal"
 	"runtime/pprof"
-	"sort"
-	"strings"
 	"syscall"
 	"time"
 )
 
 var logger *syslog.Writer
-
-type ClientGroup struct {
-	GroupSyslogTags []string
-	Clients         map[string]ClientConfigMessage
-}
 
 type RemoteHeartbeatMessage struct {
 	Type       string
@@ -32,16 +25,9 @@ type RemoteHeartbeatMessage struct {
 }
 
 type ClientConfigMessage struct {
-	SyslogTags          []string
-	SyslogTagIdentifier string
-	NetworkAddress      net.UDPAddr
-	LastHeartbeat       time.Time
-}
-
-func init() {
-	var err error
-	logger, err = syslog.Dial("udp", "localhost:514", syslog.LOG_INFO|syslog.LOG_DAEMON, "logsprinkler")
-	checkErrorFatal(err)
+	SyslogTags     []string
+	NetworkAddress net.UDPAddr
+	LastHeartbeat  time.Time
 }
 
 func handleClientHeartbeats(conn *net.UDPConn, clients chan ClientConfigMessage) {
@@ -62,21 +48,15 @@ func handleClientHeartbeats(conn *net.UDPConn, clients chan ClientConfigMessage)
 		clientConfigMessage.LastHeartbeat = time.Now()
 		clientConfigMessage.SyslogTags = make([]string, len(remoteHeartbeatMessage.SyslogTags))
 		copy(clientConfigMessage.SyslogTags, remoteHeartbeatMessage.SyslogTags)
-		sort.Strings(clientConfigMessage.SyslogTags)
-		clientConfigMessage.SyslogTagIdentifier = strings.Join(clientConfigMessage.SyslogTags, ",")
 		clients <- clientConfigMessage
 	}
 }
 
 func serveSyslogs(conn *net.UDPConn, clients chan ClientConfigMessage, signals chan os.Signal) {
-	var searchIndex int
 	var err error
-	var signal os.Signal
-	var newClientGroup ClientGroup
-	var newClientMap map[string]ClientConfigMessage
 
-	pruneDeadClientsTicker := time.NewTicker(time.Second * 10).C
-	activeClients := make(map[string]ClientGroup)
+	deadClientsTicker := time.NewTicker(time.Second * 10).C
+	activeClients := make(map[string]map[string]ClientConfigMessage)
 	syslogChannel := make(chan syslogparser.LogParts, 1)
 
 	syslogServer := syslogd.NewServer()
@@ -87,60 +67,67 @@ func serveSyslogs(conn *net.UDPConn, clients chan ClientConfigMessage, signals c
 	for {
 		select {
 		case clientConfigMessage := <-clients:
-			if clientGroup, ok := activeClients[clientConfigMessage.SyslogTagIdentifier]; ok {
-				clientGroup.Clients[clientConfigMessage.NetworkAddress.String()] = clientConfigMessage
-			} else {
-				newClientGroup.GroupSyslogTags = make([]string, len(clientConfigMessage.SyslogTags))
-				copy(newClientGroup.GroupSyslogTags, clientConfigMessage.SyslogTags)
-				newClientMap = make(map[string]ClientConfigMessage)
-				newClientGroup.Clients = newClientMap
-				newClientGroup.Clients[clientConfigMessage.NetworkAddress.String()] = clientConfigMessage
-				activeClients[clientConfigMessage.SyslogTagIdentifier] = newClientGroup
-			}
-		case <-pruneDeadClientsTicker:
+			addClient(activeClients, clientConfigMessage)
+		case <-deadClientsTicker:
 			pruneDeadClients(activeClients)
 		case logParts := <-syslogChannel:
-			logTag := fmt.Sprintf("%s", logParts["tag"])
-			for clientGroupIdentifier, clientGroup := range activeClients {
-				searchIndex = sort.SearchStrings(clientGroup.GroupSyslogTags, logTag)
-				if clientGroupIdentifier == "*" || (searchIndex < len(clientGroup.GroupSyslogTags) && clientGroup.GroupSyslogTags[searchIndex] == logTag) {
-					// Example rsyslog message: 'Apr  3 19:23:40 apply02 nginx-apply: this is the message'
-					unformattedTime := logParts["timestamp"].(time.Time)
-					formattedTime := unformattedTime.Format(time.Stamp)
-					logMessage := fmt.Sprintf("%s %s %s%s %s\n", formattedTime, logParts["hostname"], logParts["tag"], ":", logParts["content"])
-					for _, clientConfigMessage := range clientGroup.Clients {
-						conn.WriteToUDP([]byte(logMessage), &clientConfigMessage.NetworkAddress)
-					}
-				}
-			}
-		case signal = <-signals:
+			sendLogsToClients(conn, activeClients, logParts)
+		case signal := <-signals:
 			fmt.Println("\nExiting caught signal:", signal)
 			return
 		}
 	}
 }
 
-func pruneDeadClients(activeClients map[string]ClientGroup) {
-	var totalNumberOfClients int
-	var numberOfClients int
-	numberOfClients = 0
-	for clientGroupIdentifier, clientGroup := range activeClients {
-		for clientNetworkAddress, clientConfigMessage := range clientGroup.Clients {
+func sendLogsToClients(conn *net.UDPConn, activeClients map[string]map[string]ClientConfigMessage, logParts syslogparser.LogParts) {
+	// Example rsyslog message: 'Apr  3 19:23:40 apply02 nginx-apply: this is the message'
+	unformattedTime := logParts["timestamp"].(time.Time)
+	formattedTime := unformattedTime.Format(time.Stamp)
+	logMessage := fmt.Sprintf("%s %s %s%s %s\n", formattedTime, logParts["hostname"], logParts["tag"], ":", logParts["content"])
+	syslogTag := fmt.Sprintf("%s", logParts["tag"])
+
+	if clients, ok := activeClients[syslogTag]; ok {
+		for _, clientConfigMessage := range clients {
+			conn.WriteToUDP([]byte(logMessage), &clientConfigMessage.NetworkAddress)
+		}
+	}
+
+	// Send all messages to "*" clients
+	if clients, ok := activeClients["*"]; ok {
+		for _, clientConfigMessage := range clients {
+			conn.WriteToUDP([]byte(logMessage), &clientConfigMessage.NetworkAddress)
+		}
+	}
+}
+
+func addClient(activeClients map[string]map[string]ClientConfigMessage, clientConfigMessage ClientConfigMessage) {
+	var newClientMap map[string]ClientConfigMessage
+	for _, syslogTag := range clientConfigMessage.SyslogTags {
+		if clients, ok := activeClients[syslogTag]; ok {
+			clients[clientConfigMessage.NetworkAddress.String()] = clientConfigMessage
+		} else {
+			newClientMap = make(map[string]ClientConfigMessage)
+			newClientMap[clientConfigMessage.NetworkAddress.String()] = clientConfigMessage
+			activeClients[syslogTag] = newClientMap
+		}
+	}
+}
+
+func pruneDeadClients(activeClients map[string]map[string]ClientConfigMessage) {
+	for syslogTag, clients := range activeClients {
+		for clientNetworkAddress, clientConfigMessage := range clients {
 			lastHeartbeatDuration := time.Now().Sub(clientConfigMessage.LastHeartbeat)
 			if lastHeartbeatDuration.Seconds() >= 10 {
-				delete(clientGroup.Clients, clientNetworkAddress)
+				delete(clients, clientNetworkAddress)
 			}
 		}
 
-		if len(clientGroup.Clients) == 0 {
-			delete(activeClients, clientGroupIdentifier)
+		if len(clients) == 0 {
+			delete(activeClients, syslogTag)
 		} else {
-			numberOfClients = len(clientGroup.Clients)
-			totalNumberOfClients += numberOfClients
-			fmt.Printf("Group [%s], Clients %d\n", clientGroupIdentifier, numberOfClients)
+			logger.Info(fmt.Sprintf("Tag: %s, Clients: %d\n", syslogTag, len(clients)))
 		}
 	}
-	fmt.Println("Total Clients:", totalNumberOfClients)
 }
 
 func checkErrorFatal(err error) {
@@ -159,12 +146,18 @@ func checkError(err error) bool {
 	return foundError
 }
 
+func init() {
+	var err error
+	logger, err = syslog.Dial("udp", "localhost:514", syslog.LOG_INFO|syslog.LOG_DAEMON, "logsprinkler")
+	checkErrorFatal(err)
+}
+
 func main() {
 	var cpuprofile = flag.String("cpuprofile", "", "write cpu profile to file")
 	var memprofile = flag.String("memprofile", "", "write memory profile to this file")
 	flag.Parse()
 
-	logger.Info("logsprinkler starting up")
+	logger.Info("Starting up")
 
 	signals := make(chan os.Signal, 1)
 	signal.Notify(signals, syscall.SIGINT, syscall.SIGTERM)
@@ -180,6 +173,7 @@ func main() {
 	conn, err := net.ListenUDP("udp", &UDPAddr)
 	checkErrorFatal(err)
 	clients := make(chan ClientConfigMessage)
+
 	go handleClientHeartbeats(conn, clients)
 	serveSyslogs(conn, clients, signals)
 
