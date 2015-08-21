@@ -60,7 +60,8 @@ func handleClientHeartbeats(conn *net.UDPConn, clients chan ClientConfigMessage)
 		}
 		clientConfigMessage.NetworkAddress = *networkAddress
 		clientConfigMessage.LastHeartbeat = time.Now()
-		clientConfigMessage.SyslogTags = remoteHeartbeatMessage.SyslogTags
+		clientConfigMessage.SyslogTags = make([]string, len(remoteHeartbeatMessage.SyslogTags))
+		copy(clientConfigMessage.SyslogTags, remoteHeartbeatMessage.SyslogTags)
 		sort.Strings(clientConfigMessage.SyslogTags)
 		clientConfigMessage.SyslogTagIdentifier = strings.Join(clientConfigMessage.SyslogTags, ",")
 		clients <- clientConfigMessage
@@ -89,7 +90,8 @@ func serveSyslogs(conn *net.UDPConn, clients chan ClientConfigMessage, signals c
 			if clientGroup, ok := activeClients[clientConfigMessage.SyslogTagIdentifier]; ok {
 				clientGroup.Clients[clientConfigMessage.NetworkAddress.String()] = clientConfigMessage
 			} else {
-				newClientGroup.GroupSyslogTags = clientConfigMessage.SyslogTags
+				newClientGroup.GroupSyslogTags = make([]string, len(clientConfigMessage.SyslogTags))
+				copy(newClientGroup.GroupSyslogTags, clientConfigMessage.SyslogTags)
 				newClientMap = make(map[string]ClientConfigMessage)
 				newClientGroup.Clients = newClientMap
 				newClientGroup.Clients[clientConfigMessage.NetworkAddress.String()] = clientConfigMessage
