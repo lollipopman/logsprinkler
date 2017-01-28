@@ -57,7 +57,8 @@ func serveSyslogs(conn *net.UDPConn, clients chan ClientConfigMessage, signals c
 
 	deadClientsTicker := time.NewTicker(time.Second * 10).C
 	activeClients := make(map[string]map[string]ClientConfigMessage)
-	syslogChannel := make(chan syslogparser.LogParts, 1)
+	// logs are about 330 bytes, lets cache up to a 50MBs worth of logs
+	syslogChannel := make(chan syslogparser.LogParts, 150000)
 
 	syslogServer := syslogd.NewServer()
 	err = syslogServer.ListenUDP(":5515")
