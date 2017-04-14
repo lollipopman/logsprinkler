@@ -5,6 +5,7 @@ package main
 
 import (
 	"encoding/json"
+	"os"
 	"flag"
 	"fmt"
 	"log"
@@ -15,6 +16,7 @@ import (
 
 type RemoteHeartbeatMessage struct {
 	Type       string
+	Pid        int
 	SyslogTags []string
 }
 
@@ -31,6 +33,7 @@ func sendHeartbeats(conn net.Conn, syslogTags []string) {
 	var remoteHeartbeatMessage RemoteHeartbeatMessage
 	remoteHeartbeatMessage.Type = "heartbeat"
 	remoteHeartbeatMessage.SyslogTags = syslogTags
+	remoteHeartbeatMessage.Pid = os.Getpid()
 	byteHeartbeatMessage, err := json.Marshal(remoteHeartbeatMessage)
 	checkError(err)
 

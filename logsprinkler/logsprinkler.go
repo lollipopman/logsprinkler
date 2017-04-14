@@ -6,37 +6,72 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	log "github.com/Sirupsen/logrus"
 	"github.com/jeromer/syslogparser"
 	"github.com/lollipopman/syslogd"
-	"log/syslog"
 	"net"
 	"os"
 	"os/signal"
 	"runtime/pprof"
 	"syscall"
+	"strconv"
 	"time"
 )
 
-var logger *syslog.Writer
+func init() {
+	// Output to stdout instead of the default stderr, could also be a file.
+	log.SetOutput(os.Stderr)
+
+	// Only log the warning severity or above.
+	log.SetLevel(log.DebugLevel)
+}
+
+func isEAGAIN(err error) bool {
+	if pe, ok := err.(*os.PathError); ok {
+		if errno, ok := pe.Err.(syscall.Errno); ok && (errno == syscall.EAGAIN || errno == syscall.EPIPE) {
+			return true
+		}
+	}
+	return false
+}
+
+type TagConfig struct {
+	Clients     int
+	NewClients  chan int
+	DeadClients chan int
+	Logs        chan syslogparser.LogParts
+	Done        chan int
+}
+
+type PipeStatus struct {
+	Name     string
+	File     *os.File
+	Open     bool
+}
 
 type RemoteHeartbeatMessage struct {
 	Type       string
+	Pid        int
 	SyslogTags []string
 }
 
 type ClientConfigMessage struct {
-	SyslogTags     []string
-	NetworkAddress net.UDPAddr
-	LastHeartbeat  time.Time
+	SyslogTags    []string
+	Pid           int
+	LastHeartbeat time.Time
 }
 
-func handleClientHeartbeats(conn *net.UDPConn, clients chan ClientConfigMessage) {
+func handleClientHeartbeats(clientHeartbeats chan ClientConfigMessage) {
 	var remoteHeartbeatMessage RemoteHeartbeatMessage
 	var clientConfigMessage ClientConfigMessage
 	byteHeartbeatMessage := make([]byte, 1024)
 
+	UDPAddr := net.UDPAddr{Port: 5514}
+	conn, err := net.ListenUDP("udp", &UDPAddr)
+	checkErrorFatal(err)
+
 	for {
-		bytesRead, networkAddress, err := conn.ReadFromUDP(byteHeartbeatMessage)
+		bytesRead, _, err := conn.ReadFromUDP(byteHeartbeatMessage)
 		if checkError(err) {
 			continue
 		}
@@ -44,19 +79,43 @@ func handleClientHeartbeats(conn *net.UDPConn, clients chan ClientConfigMessage)
 		if checkError(err) {
 			continue
 		}
-		clientConfigMessage.NetworkAddress = *networkAddress
+		clientConfigMessage.Pid = remoteHeartbeatMessage.Pid
 		clientConfigMessage.LastHeartbeat = time.Now()
 		clientConfigMessage.SyslogTags = make([]string, len(remoteHeartbeatMessage.SyslogTags))
 		copy(clientConfigMessage.SyslogTags, remoteHeartbeatMessage.SyslogTags)
-		clients <- clientConfigMessage
+		clientHeartbeats <- clientConfigMessage
 	}
 }
 
-func serveSyslogs(conn *net.UDPConn, clients chan ClientConfigMessage, signals chan os.Signal) {
+func monitorClients(clientHeartbeats chan ClientConfigMessage, newClients chan ClientConfigMessage, deadClients chan ClientConfigMessage) {
+	clients := make(map[int]ClientConfigMessage)
+	deadClientsTicker := time.NewTicker(time.Second * 10).C
+
+	for {
+		select {
+		case clientConfigMessage := <-clientHeartbeats:
+			if _, ok := clients[clientConfigMessage.Pid]; !ok {
+				log.Info("new client")
+				newClients <-clientConfigMessage
+			}
+			clients[clientConfigMessage.Pid] = clientConfigMessage
+		case <-deadClientsTicker:
+			for pid, clientConfigMessage := range clients {
+				lastHeartbeatDuration := time.Now().Sub(clientConfigMessage.LastHeartbeat)
+				if lastHeartbeatDuration.Seconds() >= 10 {
+					delete(clients, pid)
+					deadClients <- clientConfigMessage
+				}
+			}
+		}
+	}
+}
+
+func serveSyslogs(newClients chan ClientConfigMessage, deadClients chan ClientConfigMessage, signals chan os.Signal) {
 	var err error
 
-	deadClientsTicker := time.NewTicker(time.Second * 10).C
-	activeClients := make(map[string]map[string]ClientConfigMessage)
+	activeTags := make(map[string]*TagConfig)
+
 	// logs are about 330 bytes, lets cache up to a 50MBs worth of logs
 	syslogChannel := make(chan syslogparser.LogParts, 150000)
 
@@ -67,12 +126,18 @@ func serveSyslogs(conn *net.UDPConn, clients chan ClientConfigMessage, signals c
 
 	for {
 		select {
-		case clientConfigMessage := <-clients:
-			addClient(activeClients, clientConfigMessage)
-		case <-deadClientsTicker:
-			pruneDeadClients(activeClients)
+		case clientConfigMessage := <-newClients:
+			log.Info("serveSyslogs: new client")
+			addClient(activeTags, clientConfigMessage)
+			log.Info("serveSyslogs: Client added")
+			log.Info(activeTags)
+		case clientConfigMessage := <-deadClients:
+			pruneDeadClients(activeTags, clientConfigMessage)
 		case logParts := <-syslogChannel:
-			sendLogsToClients(conn, activeClients, logParts)
+			log.Info("serveSyslogs: logs received, tag: " + logParts["tag"].(string))
+			if tagConfig, ok := activeTags[logParts["tag"].(string)]; ok {
+				tagConfig.Logs <- logParts
+			}
 		case signal := <-signals:
 			fmt.Println("\nExiting caught signal:", signal)
 			return
@@ -80,60 +145,129 @@ func serveSyslogs(conn *net.UDPConn, clients chan ClientConfigMessage, signals c
 	}
 }
 
-func sendLogsToClients(conn *net.UDPConn, activeClients map[string]map[string]ClientConfigMessage, logParts syslogparser.LogParts) {
-	// Example rsyslog message: 'Apr  3 19:23:40 apply02 nginx-apply: this is the message'
-	unformattedTime := logParts["timestamp"].(time.Time)
-	formattedTime := unformattedTime.Format(time.Stamp)
-	logMessage := fmt.Sprintf("%s %s %s%s %s\n", formattedTime, logParts["hostname"], logParts["tag"], ":", logParts["content"])
-	syslogTag := fmt.Sprintf("%s", logParts["tag"])
-
-	if clients, ok := activeClients[syslogTag]; ok {
-		for _, clientConfigMessage := range clients {
-			conn.WriteToUDP([]byte(logMessage), &clientConfigMessage.NetworkAddress)
-		}
+func tagSender(tag string, newClients chan int, deadClients chan int, logs chan syslogparser.LogParts, done chan int) {
+	var err error
+	var n int
+	clients := make(map[int]*PipeStatus)
+	log.Info("tagSender: startup!")
+	tagsPath := "./tags/" + tag
+	if _, err := os.Stat(tagsPath); os.IsNotExist(err) {
+		os.Mkdir(tagsPath, 0770)
 	}
-
-	// Send all messages to "*" clients
-	if clients, ok := activeClients["*"]; ok {
-		for _, clientConfigMessage := range clients {
-			conn.WriteToUDP([]byte(logMessage), &clientConfigMessage.NetworkAddress)
-		}
-	}
-}
-
-func addClient(activeClients map[string]map[string]ClientConfigMessage, clientConfigMessage ClientConfigMessage) {
-	var newClientMap map[string]ClientConfigMessage
-	for _, syslogTag := range clientConfigMessage.SyslogTags {
-		if clients, ok := activeClients[syslogTag]; ok {
-			clients[clientConfigMessage.NetworkAddress.String()] = clientConfigMessage
-		} else {
-			newClientMap = make(map[string]ClientConfigMessage)
-			newClientMap[clientConfigMessage.NetworkAddress.String()] = clientConfigMessage
-			activeClients[syslogTag] = newClientMap
-		}
-	}
-}
-
-func pruneDeadClients(activeClients map[string]map[string]ClientConfigMessage) {
-	for syslogTag, clients := range activeClients {
-		for clientNetworkAddress, clientConfigMessage := range clients {
-			lastHeartbeatDuration := time.Now().Sub(clientConfigMessage.LastHeartbeat)
-			if lastHeartbeatDuration.Seconds() >= 10 {
-				delete(clients, clientNetworkAddress)
+	for {
+		select {
+		case newClient := <-newClients:
+			log.Info("tagSender: new client!")
+			fileName := "./tags/" + tag + "/" + strconv.Itoa(newClient)
+			syscall.Mkfifo(fileName, 0666)
+			file, err := os.OpenFile(fileName, os.O_WRONLY|syscall.O_NONBLOCK, os.ModeNamedPipe)
+			if checkError(err) {
+				clients[newClient] = &PipeStatus{
+					Name: fileName,
+					File: nil,
+					Open: false,
+				}
+			} else {
+				clients[newClient] = &PipeStatus{
+					Name: fileName,
+					File: file,
+					Open: true,
+				}
 			}
+	  case deadClient := <-deadClients:
+			if pipeStatus, ok := clients[deadClient]; ok {
+				removePipe(pipeStatus)
+				delete(clients, deadClient)
+			}
+		case logParts := <-logs:
+			log.Info("tagSender: logs!, len: " + strconv.Itoa(len(clients)))
+			unformattedTime := logParts["timestamp"].(time.Time)
+			formattedTime := unformattedTime.Format(time.Stamp)
+			logMessage := fmt.Sprintf("%s %s %s%s %s\n", formattedTime, logParts["hostname"], logParts["tag"], ":", logParts["content"])
+			for client, pipeStatus := range clients {
+				log.Info("tagSender: writing log for, " + strconv.Itoa(client))
+				if ! pipeStatus.Open {
+					file, err := os.OpenFile(pipeStatus.Name, os.O_WRONLY|syscall.O_NONBLOCK, os.ModeNamedPipe)
+					if ! checkError(err) {
+						clients[client].File = file
+						clients[client].Open = true
+					}
+				}
+				if pipeStatus.Open {
+					n, err = pipeStatus.File.WriteString(logMessage)
+					log.Info("tagSender: bytes written: " + strconv.Itoa(n))
+					if ! isEAGAIN(err) {
+						checkErrorFatal(err)
+					}
+				}
+			}
+		case <-done:
+			log.Info("tagSender: done, len: " + strconv.Itoa(len(clients)))
+			for _, pipeStatus := range clients {
+				removePipe(pipeStatus)
+			}
+			return
 		}
+	}
+}
 
-		if len(clients) == 0 {
-			delete(activeClients, syslogTag)
+func removePipe(pipeStatus *PipeStatus) {
+	var err error
+	if pipeStatus.Open {
+		err = pipeStatus.File.Close()
+		if ! checkError(err) {
+			err = os.Remove(pipeStatus.File.Name())
+			checkError(err)
+		}
+	}
+}
+
+func addClient(activeTags map[string]*TagConfig, clientConfigMessage ClientConfigMessage) {
+  log.Info("addClient")
+	for _, syslogTag := range clientConfigMessage.SyslogTags {
+		if tagConfig, ok := activeTags[syslogTag]; ok {
+			log.Info("addClient: existing")
+			tagConfig.NewClients <- clientConfigMessage.Pid
+			tagConfig.Clients++
 		} else {
-			logger.Info(fmt.Sprintf("Tag: %s, Clients: %d\n", syslogTag, len(clients)))
+			log.Info("addClient: new")
+			tagConfig := &TagConfig{
+				Clients: 0,
+				NewClients:  make(chan int),
+				DeadClients: make(chan int),
+				Logs:        make(chan syslogparser.LogParts),
+				Done:        make(chan int),
+			}
+			log.Info("addClient: go")
+			go tagSender(syslogTag, tagConfig.NewClients, tagConfig.DeadClients, tagConfig.Logs, tagConfig.Done)
+			log.Info("addClient: go done")
+			tagConfig.NewClients <- clientConfigMessage.Pid
+			log.Info("addClient: tagSender received msg")
+			tagConfig.Clients++
+			activeTags[syslogTag] = tagConfig
+			log.Info("addClient: done adding new")
+			log.Info(tagConfig)
+		}
+	}
+}
+
+func pruneDeadClients(activeTags map[string]*TagConfig, clientConfigMessage ClientConfigMessage) {
+	for _, syslogTag := range clientConfigMessage.SyslogTags {
+		if tagConfig, ok := activeTags[syslogTag]; ok {
+			tagConfig.Clients--
+			if tagConfig.Clients == 0 {
+				tagConfig.Done <- 1
+			  delete(activeTags, syslogTag)
+			} else {
+				tagConfig.DeadClients <- clientConfigMessage.Pid
+			}
 		}
 	}
 }
 
 func checkErrorFatal(err error) {
 	if err != nil {
-		logger.Crit("Fatal error " + err.Error())
+		log.Fatal(fmt.Sprintf("Error %T, %s", err, err.Error()))
 		os.Exit(1)
 	}
 }
@@ -142,15 +276,9 @@ func checkError(err error) bool {
 	foundError := false
 	if err != nil {
 		foundError = true
-		logger.Warning("Error " + err.Error())
+		log.Warning(fmt.Sprintf("Error %T, %s", err, err.Error()))
 	}
 	return foundError
-}
-
-func init() {
-	var err error
-	logger, err = syslog.Dial("udp", "localhost:514", syslog.LOG_INFO|syslog.LOG_DAEMON, "logsprinkler")
-	checkErrorFatal(err)
 }
 
 func main() {
@@ -158,7 +286,7 @@ func main() {
 	var memprofile = flag.String("memprofile", "", "write memory profile to this file")
 	flag.Parse()
 
-	logger.Info("Starting up")
+	log.Info("Starting up")
 
 	signals := make(chan os.Signal, 1)
 	signal.Notify(signals, syscall.SIGINT, syscall.SIGTERM)
@@ -170,13 +298,19 @@ func main() {
 		defer pprof.StopCPUProfile()
 	}
 
-	UDPAddr := net.UDPAddr{Port: 5514}
-	conn, err := net.ListenUDP("udp", &UDPAddr)
-	checkErrorFatal(err)
-	clients := make(chan ClientConfigMessage)
+	tagsPath := "./tags"
+	if _, err := os.Stat(tagsPath); os.IsNotExist(err) {
+		os.Mkdir(tagsPath, 0770)
+	}
 
-	go handleClientHeartbeats(conn, clients)
-	serveSyslogs(conn, clients, signals)
+	clientHeartbeats := make(chan ClientConfigMessage)
+	newClients := make(chan ClientConfigMessage)
+	deadClients := make(chan ClientConfigMessage)
+
+	go handleClientHeartbeats(clientHeartbeats)
+	go monitorClients(clientHeartbeats, newClients, deadClients)
+	log.Info("Serving syslogs")
+	serveSyslogs(newClients, deadClients, signals)
 
 	if *memprofile != "" {
 		f, err := os.Create(*memprofile)
