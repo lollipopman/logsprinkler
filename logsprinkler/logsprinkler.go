@@ -13,17 +13,14 @@ import (
 	"os"
 	"os/signal"
 	"runtime/pprof"
-	"syscall"
 	"strconv"
+	"syscall"
 	"time"
 )
 
 func init() {
 	// Output to stdout instead of the default stderr, could also be a file.
 	log.SetOutput(os.Stderr)
-
-	// Only log the warning severity or above.
-	log.SetLevel(log.DebugLevel)
 }
 
 func isEAGAIN(err error) bool {
@@ -44,9 +41,9 @@ type TagConfig struct {
 }
 
 type PipeStatus struct {
-	Name     string
-	File     *os.File
-	Open     bool
+	Name string
+	File *os.File
+	Open bool
 }
 
 type RemoteHeartbeatMessage struct {
@@ -66,8 +63,9 @@ func handleClientHeartbeats(clientHeartbeats chan ClientConfigMessage) {
 	var clientConfigMessage ClientConfigMessage
 	byteHeartbeatMessage := make([]byte, 1024)
 
-	UDPAddr := net.UDPAddr{Port: 5514}
-	conn, err := net.ListenUDP("udp", &UDPAddr)
+	UDPAddr, err := net.ResolveUDPAddr("udp", "localhost:5514")
+	checkErrorFatal(err)
+	conn, err := net.ListenUDP("udp", UDPAddr)
 	checkErrorFatal(err)
 
 	for {
@@ -95,8 +93,8 @@ func monitorClients(clientHeartbeats chan ClientConfigMessage, newClients chan C
 		select {
 		case clientConfigMessage := <-clientHeartbeats:
 			if _, ok := clients[clientConfigMessage.Pid]; !ok {
-				log.Info("new client")
-				newClients <-clientConfigMessage
+				log.Infof("New client heartbeat, PID: %v", clientConfigMessage.Pid)
+				newClients <- clientConfigMessage
 			}
 			clients[clientConfigMessage.Pid] = clientConfigMessage
 		case <-deadClientsTicker:
@@ -120,26 +118,26 @@ func serveSyslogs(newClients chan ClientConfigMessage, deadClients chan ClientCo
 	syslogChannel := make(chan syslogparser.LogParts, 150000)
 
 	syslogServer := syslogd.NewServer()
-	err = syslogServer.ListenUDP(":5515")
+	err = syslogServer.ListenUDP("localhost:5515")
 	checkErrorFatal(err)
 	syslogServer.Start(syslogChannel)
+
+	logCounter := 0
 
 	for {
 		select {
 		case clientConfigMessage := <-newClients:
-			log.Info("serveSyslogs: new client")
 			addClient(activeTags, clientConfigMessage)
-			log.Info("serveSyslogs: Client added")
-			log.Info(activeTags)
 		case clientConfigMessage := <-deadClients:
 			pruneDeadClients(activeTags, clientConfigMessage)
 		case logParts := <-syslogChannel:
-			log.Info("serveSyslogs: logs received, tag: " + logParts["tag"].(string))
+			logCounter++
 			if tagConfig, ok := activeTags[logParts["tag"].(string)]; ok {
 				tagConfig.Logs <- logParts
 			}
 		case signal := <-signals:
-			fmt.Println("\nExiting caught signal:", signal)
+			log.Infof("Exiting caught signal: %v", signal)
+			log.Infof("Served %v logs:", logCounter)
 			return
 		}
 	}
@@ -149,7 +147,7 @@ func tagSender(tag string, newClients chan int, deadClients chan int, logs chan 
 	var err error
 	var n int
 	clients := make(map[int]*PipeStatus)
-	log.Info("tagSender: startup!")
+	log.Infof("tagSender for tag, %v, starting", tag)
 	tagsPath := "./tags/" + tag
 	if _, err := os.Stat(tagsPath); os.IsNotExist(err) {
 		os.Mkdir(tagsPath, 0770)
@@ -157,65 +155,60 @@ func tagSender(tag string, newClients chan int, deadClients chan int, logs chan 
 	for {
 		select {
 		case newClient := <-newClients:
-			log.Info("tagSender: new client!")
 			fileName := "./tags/" + tag + "/" + strconv.Itoa(newClient)
-			syscall.Mkfifo(fileName, 0666)
-			file, err := os.OpenFile(fileName, os.O_WRONLY|syscall.O_NONBLOCK, os.ModeNamedPipe)
-			if checkError(err) {
-				clients[newClient] = &PipeStatus{
-					Name: fileName,
-					File: nil,
-					Open: false,
-				}
-			} else {
-				clients[newClient] = &PipeStatus{
-					Name: fileName,
-					File: file,
-					Open: true,
-				}
+			log.Debugf("tagSender[%v]: new client!", fileName)
+			err = syscall.Mkfifo(fileName, 0666)
+			if err != nil {
+				log.Fatalf("Unable to create fifo: %v", fileName)
 			}
-	  case deadClient := <-deadClients:
+			clients[newClient] = &PipeStatus{
+				Name: fileName,
+				File: nil,
+				Open: false,
+			}
+		case deadClient := <-deadClients:
 			if pipeStatus, ok := clients[deadClient]; ok {
-				removePipe(pipeStatus)
+				removePipe(deadClient, pipeStatus)
 				delete(clients, deadClient)
 			}
 		case logParts := <-logs:
-			log.Info("tagSender: logs!, len: " + strconv.Itoa(len(clients)))
 			unformattedTime := logParts["timestamp"].(time.Time)
 			formattedTime := unformattedTime.Format(time.Stamp)
 			logMessage := fmt.Sprintf("%s %s %s%s %s\n", formattedTime, logParts["hostname"], logParts["tag"], ":", logParts["content"])
 			for client, pipeStatus := range clients {
-				log.Info("tagSender: writing log for, " + strconv.Itoa(client))
-				if ! pipeStatus.Open {
+				if !pipeStatus.Open {
 					file, err := os.OpenFile(pipeStatus.Name, os.O_WRONLY|syscall.O_NONBLOCK, os.ModeNamedPipe)
-					if ! checkError(err) {
+					if !checkError(err) {
 						clients[client].File = file
 						clients[client].Open = true
 					}
 				}
 				if pipeStatus.Open {
 					n, err = pipeStatus.File.WriteString(logMessage)
-					log.Info("tagSender: bytes written: " + strconv.Itoa(n))
-					if ! isEAGAIN(err) {
+					if n-len(logMessage) > 0 {
+						log.Debugf("tagSender: %v bytes not written", n-len(logMessage))
+					}
+					if !isEAGAIN(err) {
 						checkErrorFatal(err)
 					}
 				}
 			}
 		case <-done:
-			log.Info("tagSender: done, len: " + strconv.Itoa(len(clients)))
-			for _, pipeStatus := range clients {
-				removePipe(pipeStatus)
+			log.Infof("tagSender %v closing", tag)
+			for deadClient, pipeStatus := range clients {
+				removePipe(deadClient, pipeStatus)
 			}
 			return
 		}
 	}
 }
 
-func removePipe(pipeStatus *PipeStatus) {
+func removePipe(deadClient int, pipeStatus *PipeStatus) {
 	var err error
+	log.Infof("Removing dead client %v's pipe, %v", deadClient, pipeStatus.Name)
 	if pipeStatus.Open {
 		err = pipeStatus.File.Close()
-		if ! checkError(err) {
+		if !checkError(err) {
 			err = os.Remove(pipeStatus.File.Name())
 			checkError(err)
 		}
@@ -223,30 +216,22 @@ func removePipe(pipeStatus *PipeStatus) {
 }
 
 func addClient(activeTags map[string]*TagConfig, clientConfigMessage ClientConfigMessage) {
-  log.Info("addClient")
 	for _, syslogTag := range clientConfigMessage.SyslogTags {
 		if tagConfig, ok := activeTags[syslogTag]; ok {
-			log.Info("addClient: existing")
 			tagConfig.NewClients <- clientConfigMessage.Pid
 			tagConfig.Clients++
 		} else {
-			log.Info("addClient: new")
 			tagConfig := &TagConfig{
-				Clients: 0,
+				Clients:     0,
 				NewClients:  make(chan int),
 				DeadClients: make(chan int),
 				Logs:        make(chan syslogparser.LogParts),
 				Done:        make(chan int),
 			}
-			log.Info("addClient: go")
 			go tagSender(syslogTag, tagConfig.NewClients, tagConfig.DeadClients, tagConfig.Logs, tagConfig.Done)
-			log.Info("addClient: go done")
 			tagConfig.NewClients <- clientConfigMessage.Pid
-			log.Info("addClient: tagSender received msg")
 			tagConfig.Clients++
 			activeTags[syslogTag] = tagConfig
-			log.Info("addClient: done adding new")
-			log.Info(tagConfig)
 		}
 	}
 }
@@ -257,7 +242,7 @@ func pruneDeadClients(activeTags map[string]*TagConfig, clientConfigMessage Clie
 			tagConfig.Clients--
 			if tagConfig.Clients == 0 {
 				tagConfig.Done <- 1
-			  delete(activeTags, syslogTag)
+				delete(activeTags, syslogTag)
 			} else {
 				tagConfig.DeadClients <- clientConfigMessage.Pid
 			}
@@ -267,7 +252,7 @@ func pruneDeadClients(activeTags map[string]*TagConfig, clientConfigMessage Clie
 
 func checkErrorFatal(err error) {
 	if err != nil {
-		log.Fatal(fmt.Sprintf("Error %T, %s", err, err.Error()))
+		log.Fatalf("Error %T, %s", err, err.Error())
 		os.Exit(1)
 	}
 }
@@ -276,7 +261,7 @@ func checkError(err error) bool {
 	foundError := false
 	if err != nil {
 		foundError = true
-		log.Warning(fmt.Sprintf("Error %T, %s", err, err.Error()))
+		log.Warningf("Error %T, %s", err, err.Error())
 	}
 	return foundError
 }
@@ -284,9 +269,14 @@ func checkError(err error) bool {
 func main() {
 	var cpuprofile = flag.String("cpuprofile", "", "write cpu profile to file")
 	var memprofile = flag.String("memprofile", "", "write memory profile to this file")
+	var debug = flag.Bool("d", false, "Enable debug mode")
 	flag.Parse()
 
-	log.Info("Starting up")
+	if *debug {
+		log.SetLevel(log.DebugLevel)
+	} else {
+		log.SetLevel(log.InfoLevel)
+	}
 
 	signals := make(chan os.Signal, 1)
 	signal.Notify(signals, syscall.SIGINT, syscall.SIGTERM)
@@ -309,7 +299,6 @@ func main() {
 
 	go handleClientHeartbeats(clientHeartbeats)
 	go monitorClients(clientHeartbeats, newClients, deadClients)
-	log.Info("Serving syslogs")
 	serveSyslogs(newClients, deadClients, signals)
 
 	if *memprofile != "" {

@@ -1,5 +1,6 @@
 ### Todo
 
+- [ ] handle 50k a second
 - [ ] Setup a performance test harness
 - [ ] Enable profiling as an option
 - [ ] Test whether switching to pipes, rather than UDP, would be a better

@@ -19,9 +19,6 @@ import (
 func init() {
 	// Output to stdout instead of the default stderr, could also be a file.
 	log.SetOutput(os.Stderr)
-
-	// Only log the warning severity or above.
-	log.SetLevel(log.DebugLevel)
 }
 
 type RemoteHeartbeatMessage struct {
@@ -32,10 +29,19 @@ type RemoteHeartbeatMessage struct {
 
 func readTag(tag string, stdout chan string) {
 	fileName := "./tags/" + tag + "/" + strconv.Itoa(os.Getpid())
-	// TODO remove hack, of waiting for logsprinkler to open the file
-	time.Sleep(1 * time.Second)
+	for {
+		if _, err := os.Stat(fileName); os.IsNotExist(err) {
+			// Wait for logsprinkler to create our fifo
+			log.Debugf("Wating for pipe to be created by logsprinkler: %s", fileName)
+			time.Sleep(10 * time.Millisecond)
+		} else {
+			break
+		}
+	}
 	file, err := os.OpenFile(fileName, os.O_RDONLY, os.ModeNamedPipe)
-	checkError(err)
+	if err != nil {
+		log.Fatalf("Fatal error %s", err.Error())
+	}
 
 	scanner := bufio.NewScanner(file)
 	log.Debugf("Scanning started for file %s", fileName)
@@ -72,15 +78,24 @@ func sendHeartbeats(conn net.Conn, tags []string) {
 
 func checkError(err error) {
 	if err != nil {
-		log.Fatalf("Fatal error ", err.Error())
+		log.Fatalf("Fatal error %s", err.Error())
 	}
 }
 
 func main() {
-	var tagsString = flag.String("t", "*", "Comma separated list of Syslog tags or '*' to select all")
 	var tags []string
 
+	var tagsString = flag.String("t", "*", "Comma separated list of Syslog tags or '*' to select all")
+	var debug = flag.Bool("d", false, "Enable debug mode")
+
 	flag.Parse()
+
+	if *debug {
+		log.SetLevel(log.DebugLevel)
+	} else {
+		log.SetLevel(log.InfoLevel)
+	}
+
 	tags = strings.Split(*tagsString, ",")
 
 	UDPAddr := net.UDPAddr{Port: 5514}
