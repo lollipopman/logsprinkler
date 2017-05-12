@@ -4,15 +4,15 @@
 package main
 
 import (
+	"bufio"
 	"encoding/json"
 	"flag"
+	"fmt"
 	log "github.com/Sirupsen/logrus"
-	"io"
 	"net"
 	"os"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
 )
 
@@ -30,29 +30,27 @@ type RemoteHeartbeatMessage struct {
 	SyslogTags []string
 }
 
-func readTag(tag string, stdout chan []byte) {
+func readTag(tag string, stdout chan string) {
 	fileName := "./tags/" + tag + "/" + strconv.Itoa(os.Getpid())
+	// TODO remove hack, of waiting for logsprinkler to open the file
 	time.Sleep(1 * time.Second)
-	file, err := os.OpenFile(fileName, os.O_RDONLY|syscall.O_NONBLOCK, os.ModeNamedPipe)
+	file, err := os.OpenFile(fileName, os.O_RDONLY, os.ModeNamedPipe)
 	checkError(err)
 
-	for {
-		readBuffer := make([]byte, 1024)
-		_, err := file.Read(readBuffer[0:])
-		if err != nil {
-			if err != io.EOF {
-				//log.Info(err.Error())
-			}
-		} else {
-			log.Info("BYTES")
-			stdout <- readBuffer
-		}
+	scanner := bufio.NewScanner(file)
+	log.Debugf("Scanning started for file %s", fileName)
+	for scanner.Scan() {
+		stdout <- scanner.Text()
 	}
+	if err := scanner.Err(); err != nil {
+		log.Fatalf("Fatal error reading file", err.Error())
+	}
+	log.Debugf("Scanning complete")
 }
 
-func printStdout(stdout <-chan []byte) {
-	for bytes := range stdout {
-		os.Stdout.Write(bytes)
+func printStdout(stdout <-chan string) {
+	for line := range stdout {
+		fmt.Fprintln(os.Stdout, line)
 	}
 }
 
@@ -90,7 +88,7 @@ func main() {
 	checkError(err)
 
 	go sendHeartbeats(conn, tags)
-	stdout := make(chan []byte)
+	stdout := make(chan string)
 	for tag := range tags {
 		go readTag(tags[tag], stdout)
 	}
