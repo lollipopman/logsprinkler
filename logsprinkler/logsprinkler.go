@@ -131,6 +131,7 @@ func serveSyslogs(newClients chan ClientConfigMessage, deadClients chan ClientCo
 		case clientConfigMessage := <-deadClients:
 			pruneDeadClients(activeTags, clientConfigMessage)
 		case logParts := <-syslogChannel:
+			log.Debugf("serveSyslogs: logs received, tag: " + logParts["tag"].(string))
 			logCounter++
 			if tagConfig, ok := activeTags[logParts["tag"].(string)]; ok {
 				tagConfig.Logs <- logParts
@@ -253,7 +254,6 @@ func pruneDeadClients(activeTags map[string]*TagConfig, clientConfigMessage Clie
 func checkErrorFatal(err error) {
 	if err != nil {
 		log.Fatalf("Error %T, %s", err, err.Error())
-		os.Exit(1)
 	}
 }
 
@@ -267,8 +267,8 @@ func checkError(err error) bool {
 }
 
 func main() {
-	var cpuprofile = flag.String("cpuprofile", "", "write cpu profile to file")
-	var memprofile = flag.String("memprofile", "", "write memory profile to this file")
+	var cpuProfile = flag.String("c", "", "write cpu profile to file")
+	var memProfile = flag.String("m", "", "write memory profile to this file")
 	var debug = flag.Bool("d", false, "Enable debug mode")
 	flag.Parse()
 
@@ -281,8 +281,8 @@ func main() {
 	signals := make(chan os.Signal, 1)
 	signal.Notify(signals, syscall.SIGINT, syscall.SIGTERM)
 
-	if *cpuprofile != "" {
-		f, err := os.Create(*cpuprofile)
+	if *cpuProfile != "" {
+		f, err := os.Create(*cpuProfile)
 		checkErrorFatal(err)
 		pprof.StartCPUProfile(f)
 		defer pprof.StopCPUProfile()
@@ -301,8 +301,8 @@ func main() {
 	go monitorClients(clientHeartbeats, newClients, deadClients)
 	serveSyslogs(newClients, deadClients, signals)
 
-	if *memprofile != "" {
-		f, err := os.Create(*memprofile)
+	if *memProfile != "" {
+		f, err := os.Create(*memProfile)
 		checkErrorFatal(err)
 		pprof.Lookup("heap").WriteTo(f, 0)
 		f.Close()

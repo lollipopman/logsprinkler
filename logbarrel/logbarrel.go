@@ -11,13 +11,15 @@ import (
 	log "github.com/Sirupsen/logrus"
 	"net"
 	"os"
+	"os/signal"
+	"runtime/pprof"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 )
 
 func init() {
-	// Output to stdout instead of the default stderr, could also be a file.
 	log.SetOutput(os.Stderr)
 }
 
@@ -82,10 +84,18 @@ func checkError(err error) {
 	}
 }
 
+func checkErrorFatal(err error) {
+	if err != nil {
+		log.Fatalf("Error %T, %s", err, err.Error())
+	}
+}
+
 func main() {
 	var tags []string
 
 	var tagsString = flag.String("t", "*", "Comma separated list of Syslog tags or '*' to select all")
+	var cpuProfile = flag.String("c", "", "write cpu profile to file")
+	var memProfile = flag.String("m", "", "write memory profile to this file")
 	var debug = flag.Bool("d", false, "Enable debug mode")
 
 	flag.Parse()
@@ -96,6 +106,17 @@ func main() {
 		log.SetLevel(log.InfoLevel)
 	}
 
+	signals := make(chan os.Signal, 1)
+	signal.Notify(signals, syscall.SIGINT, syscall.SIGTERM, syscall.SIGPIPE)
+
+	if *cpuProfile != "" {
+		f, err := os.Create(*cpuProfile)
+		checkErrorFatal(err)
+		err = pprof.StartCPUProfile(f)
+		checkErrorFatal(err)
+		defer pprof.StopCPUProfile()
+	}
+
 	tags = strings.Split(*tagsString, ",")
 
 	UDPAddr := net.UDPAddr{Port: 5514}
@@ -103,9 +124,22 @@ func main() {
 	checkError(err)
 
 	go sendHeartbeats(conn, tags)
-	stdout := make(chan string)
+	// buffer up to 5000 log messages
+	stdout := make(chan string, 5000)
+	//stdout := make(chan string)
 	for tag := range tags {
 		go readTag(tags[tag], stdout)
 	}
-	printStdout(stdout)
+	go printStdout(stdout)
+
+	signal := <-signals
+	log.Infof("Exiting caught signal: %v", signal)
+
+	if *memProfile != "" {
+		f, err := os.Create(*memProfile)
+		checkErrorFatal(err)
+		pprof.Lookup("heap").WriteTo(f, 0)
+		f.Close()
+	}
+	log.Info("WTF")
 }

@@ -1,6 +1,8 @@
 ### Todo
 
 - [ ] handle 50k a second
+    better performance than udp version, as tested with modified loggen
+    logbarrel buffering helped
 - [ ] Setup a performance test harness
 - [ ] Enable profiling as an option
 - [ ] Test whether switching to pipes, rather than UDP, would be a better
