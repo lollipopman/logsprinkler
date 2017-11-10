@@ -1,0 +1,12 @@
+# Below we forbid everything and only allow what we know, that's much easier
+# than blocking about 500 different test files and bug report outputs.
+/.*
+/*
+!/.gitignore
+!/Gopkg.lock
+!/Gopkg.toml
+!/README.md
+!/TODO.md
+!/debian/*
+!/logbarrel/*
+!/logsprinkler/*
