@@ -49,12 +49,15 @@ func checkError(err error) {
 
 func main() {
 	var syslogTagsString = flag.String("t", "*", "Comma separated list of Syslog tags or '*' to select all")
+	var serverIPString = flag.String("s", "localhost", "Hostname or IP of server")
 	var syslogTags []string
 
 	flag.Parse()
 	syslogTags = strings.Split(*syslogTagsString, ",")
+	serverIP, err := net.ResolveIPAddr("ip", *serverIPString)
+	checkError(err)
 
-	UDPAddr := net.UDPAddr{Port: 5514}
+	UDPAddr := net.UDPAddr{IP: serverIP.IP, Port: 5514}
 	conn, err := net.DialUDP("udp", nil, &UDPAddr)
 	checkError(err)
 
