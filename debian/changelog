@@ -1,3 +1,9 @@
+logsprinkler (1.6) stable; urgency=medium
+
+  * allow connecting to remote logsprinklers
+
+ -- Jesse Hathaway <jesse@mbuki-mvuki.org>  Fri, 10 Nov 2017 11:29:10 -0600
+
 logsprinkler (1.5) stable; urgency=low
 
   * Remove regex matching to increase performance
