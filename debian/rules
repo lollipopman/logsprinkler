@@ -11,3 +11,6 @@ export DH_GOPKG := github.com/lollipopman/logsprinkler
 
 %:
 	dh $@ --buildsystem=golang --with=golang
+
+override_dh_builddeb:
+		dh_builddeb -- -Zgzip
