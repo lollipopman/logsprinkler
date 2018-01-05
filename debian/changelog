@@ -1,3 +1,10 @@
+logsprinkler (1.7) stable; urgency=medium
+
+  * rebuild with 1.9
+  * add version flag
+
+ -- Jesse Hathaway <jesse@mbuki-mvuki.org>  Fri, 05 Jan 2018 10:19:06 -0600
+
 logsprinkler (1.6) stable; urgency=medium
 
   * allow connecting to remote logsprinklers
