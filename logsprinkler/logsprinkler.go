@@ -6,8 +6,6 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
-	"github.com/jeromer/syslogparser"
-	"github.com/lollipopman/syslogd"
 	"log/syslog"
 	"net"
 	"os"
@@ -16,6 +14,9 @@ import (
 	"runtime/pprof"
 	"syscall"
 	"time"
+
+	"github.com/jeromer/syslogparser"
+	"github.com/lollipopman/syslogd"
 )
 
 // version set from linker
