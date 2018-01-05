@@ -9,9 +9,13 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"runtime"
 	"strings"
 	"time"
 )
+
+// version set from linker
+var version string
 
 type RemoteHeartbeatMessage struct {
 	Type       string
@@ -50,9 +54,14 @@ func checkError(err error) {
 func main() {
 	var syslogTagsString = flag.String("t", "*", "Comma separated list of Syslog tags or '*' to select all")
 	var serverIPString = flag.String("s", "localhost", "Hostname or IP of server")
+	var showVersion = flag.Bool("v", false, "Show version")
 	var syslogTags []string
 
 	flag.Parse()
+	if *showVersion {
+		fmt.Printf("logbarrel verision: %s, go runtime version: %s\n", version, runtime.Version())
+		os.Exit(0)
+	}
 	syslogTags = strings.Split(*syslogTagsString, ",")
 	serverIP, err := net.ResolveIPAddr("ip", *serverIPString)
 	checkError(err)

@@ -12,10 +12,14 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"runtime"
 	"runtime/pprof"
 	"syscall"
 	"time"
 )
+
+// version set from linker
+var version string
 
 var logger *syslog.Writer
 
@@ -156,7 +160,13 @@ func init() {
 func main() {
 	var cpuprofile = flag.String("cpuprofile", "", "write cpu profile to file")
 	var memprofile = flag.String("memprofile", "", "write memory profile to this file")
+	var showVersion = flag.Bool("v", false, "Show version")
 	flag.Parse()
+
+	if *showVersion {
+		fmt.Printf("logbarrel verision: %s, go runtime version: %s\n", version, runtime.Version())
+		os.Exit(0)
+	}
 
 	logger.Info("Starting up")
 
