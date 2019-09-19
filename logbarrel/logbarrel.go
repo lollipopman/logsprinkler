@@ -24,8 +24,8 @@ type RemoteHeartbeatMessage struct {
 	SyslogTags []string
 }
 
-func receiveSyslogs(conn net.Conn) {
-	readBuffer := make([]byte, 1024)
+func receiveSyslogs(conn net.Conn, maxBufferSize int) {
+	readBuffer := make([]byte, maxBufferSize)
 	for {
 		bytesRead, err := conn.Read(readBuffer[0:])
 		checkError(err)
@@ -66,6 +66,7 @@ func main() {
 	var showVersion = flag.Bool("v", false, "Show version")
 	var cpuprofile = flag.String("cpuprofile", "", "write cpu profile to file")
 	var memprofile = flag.String("memprofile", "", "write memory profile to this file")
+	var maxBufferSize = flag.Int("m", "1024", "Expected max syslog line length. Defaults to RFC compliant 1024 bytes")
 	var syslogTags []string
 
 	flag.Parse()
@@ -89,7 +90,7 @@ func main() {
 	checkError(err)
 
 	go sendHeartbeats(conn, syslogTags)
-	receiveSyslogs(conn)
+	receiveSyslogs(conn, maxBufferSize)
 
 	if *memprofile != "" {
 		f, err := os.Create(*memprofile)
