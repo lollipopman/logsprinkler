@@ -25,7 +25,7 @@ type RemoteHeartbeatMessage struct {
 }
 
 func receiveSyslogs(conn net.Conn) {
-	readBuffer := make([]byte, 1024)
+	readBuffer := make([]byte, 65507)
 	for {
 		bytesRead, err := conn.Read(readBuffer[0:])
 		checkError(err)
