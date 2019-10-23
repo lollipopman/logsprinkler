@@ -1,3 +1,9 @@
+logsprinkler (1.8) stable; urgency=medium
+
+  * increase UDP read buffer to max UDP size 64KiB
+
+ -- Jesse Hathaway <jesse@mbuki-mvuki.org>  Wed, 23 Oct 2019 16:40:13 -0500
+
 logsprinkler (1.7) stable; urgency=medium
 
   * rebuild with 1.9
