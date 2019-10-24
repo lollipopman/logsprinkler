@@ -10,3 +10,5 @@
 !/debian/*
 !/logbarrel/*
 !/logsprinkler/*
+!/vendor
+!/vendor/**
