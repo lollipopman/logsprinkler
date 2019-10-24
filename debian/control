@@ -1,5 +1,4 @@
 Source: logsprinkler
-Build-Depends: golang-syslogparser-dev, golang-syslogd-dev, golang-go, dh-golang
 Maintainer: Jesse Hathaway <jesse@mbuki-mvuki.org>
 Priority: extra
 Section: main
