@@ -7,8 +7,14 @@
 !/go.sum
 !/README.md
 !/TODO.md
-!/debian/*
+!/debian/changelog
+!/debian/compat
+!/debian/control
+!/debian/logsprinkler.service
+!/debian/rules
+!/logbarrel
 !/logbarrel/*
+!/logsprinkler
 !/logsprinkler/*
 !/vendor
 !/vendor/**

@@ -14,7 +14,5 @@ export DH_GOPKG := github.com/lollipopman/logsprinkler
 
 override_dh_auto_build:
 		dh_auto_build -- -ldflags "-X main.version=$(VERSION)"
-override_dh_builddeb:
-		dh_builddeb -- -Zgzip
 override_dh_auto_install:
 		dh_auto_install -- --no-source

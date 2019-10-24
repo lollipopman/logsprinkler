@@ -1,0 +1,13 @@
+[Unit]
+Documentation=https://github.com/lollipopman/logsprinkler
+Description=Broadcasts UDP syslog messages to clients
+Before=multi-user.target
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Restart=on-failure
+ExecStart=/usr/bin/logsprinkler
+
+[Install]
+WantedBy=multi-user.target

@@ -8,7 +8,7 @@ Vcs-Git: git@github.com:lollipopman/logsprinkler.git
 Package: logsprinkler
 Architecture: any
 Priority: extra
-Depends: ${shlibs:Depends}, ${misc:Depends}, daemon
+Depends: ${shlibs:Depends}, ${misc:Depends}
 Description: Broadcasts UDP syslog messages to clients
   logsprinkler is a daemon which listens for syslog messages on UDP port
   5514. In addition it listens for clients, logbarrels, who are sending
