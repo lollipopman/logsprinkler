@@ -3,8 +3,8 @@
 /.*
 /*
 !/.gitignore
-!/Gopkg.lock
-!/Gopkg.toml
+!/go.mod
+!/go.sum
 !/README.md
 !/TODO.md
 !/debian/*
